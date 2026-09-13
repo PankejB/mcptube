@@ -32,6 +32,7 @@ class SceneFrameExtractor:
     _DEFAULT_THRESHOLD = 0.4
     _MAX_FRAMES = 50  # safety cap
     _SCALE_WIDTH = 1280
+    _MAX_HEIGHT = 480  # source cap — scene detection decodes the whole video
 
     def __init__(self, threshold: float | None = None) -> None:
         """Initialize scene frame extractor.
@@ -88,10 +89,17 @@ class SceneFrameExtractor:
             # Frames need video only — no audio. YouTube no longer offers
             # progressive (video+audio) formats for most videos, so a "best"
             # selector matches nothing and yt-dlp raises "Requested format is
-            # not available". Prefer direct https over HLS: ffmpeg's -ss seek
-            # uses HTTP range requests, which m3u8 playlists handle poorly.
+            # not available". Prefer direct https over HLS.
+            #
+            # Cap the height: unlike single-frame extraction, scene detection
+            # decodes the WHOLE video, so resolution dominates runtime. The
+            # filter scales to _SCALE_WIDTH anyway, so pulling a larger stream
+            # buys nothing. Measured on an 8-minute video: 480p took 2.9s,
+            # while 720p and 1080p took ~250s each — past the ffmpeg timeout —
+            # and all three detected exactly the same frames.
             "format": (
-                "bestvideo[ext=mp4][protocol=https]/"
+                f"bestvideo[height<={self._MAX_HEIGHT}][protocol=https]/"
+                f"bestvideo[height<={self._MAX_HEIGHT}]/"
                 "bestvideo[protocol=https]/"
                 "best[ext=mp4]/best"
             ),
