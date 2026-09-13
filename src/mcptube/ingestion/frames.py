@@ -56,7 +56,16 @@ class FrameExtractor:
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
-            "format": "best[ext=mp4]/best",
+            # Frames need video only — no audio. YouTube no longer offers
+            # progressive (video+audio) formats for most videos, so a "best"
+            # selector matches nothing and yt-dlp raises "Requested format is
+            # not available". Prefer direct https over HLS: ffmpeg's -ss seek
+            # uses HTTP range requests, which m3u8 playlists handle poorly.
+            "format": (
+                "bestvideo[ext=mp4][protocol=https]/"
+                "bestvideo[protocol=https]/"
+                "best[ext=mp4]/best"
+            ),
             "skip_download": True,
         }
         try:
