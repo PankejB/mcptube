@@ -5,7 +5,11 @@ from fastmcp.utilities.types import Image
 
 from mcptube.config import settings
 from mcptube.ingestion.frames import FrameExtractionError
-from mcptube.ingestion.youtube import YouTubeExtractor
+from mcptube.ingestion.youtube import (
+    ExtractionError,
+    TranscriptThrottledError,
+    YouTubeExtractor,
+)
 from mcptube.llm import LLMClient
 from mcptube.models import Video
 from mcptube.service import McpTubeService, VideoAlreadyExistsError, VideoNotFoundError
@@ -123,6 +127,12 @@ def add_video(url: str, text_only: bool = False) -> dict:
         return _video_summary(video)
     except VideoAlreadyExistsError as e:
         return {"error": str(e)}
+    except TranscriptThrottledError as e:
+        # The caption download was rate-limited — nothing was persisted, so a
+        # later retry is clean. Distinct from a video with no captions at all.
+        return {"error": str(e), "reason": "transcript_throttled", "retryable": True}
+    except ExtractionError as e:
+        return {"error": str(e), "reason": "extraction_failed"}
 
 
 @mcp.tool(annotations={"readOnlyHint": True})

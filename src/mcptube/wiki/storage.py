@@ -89,8 +89,8 @@ class FileWikiRepository(WikiRepository):
                      Defaults to settings.data_dir / "wiki.db".
                      Use ":memory:" for testing.
         """
-        self._wiki_dir = wiki_dir or (settings.data_dir / "wiki")
-        self._db_path = db_path or str(settings.data_dir / "wiki.db")
+        self._wiki_dir = wiki_dir or settings.wiki_dir
+        self._db_path = db_path or str(settings.wiki_db)
 
         # Create directory structure
         for page_type in WikiPageType:

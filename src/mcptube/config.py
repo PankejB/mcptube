@@ -24,6 +24,14 @@ class Settings(BaseSettings):
         default=None,
         description="Directory for cached extracted frames. Defaults to data_dir/frames.",
     )
+    wiki_dir: Path | None = Field(
+        default=None,
+        description="Directory for wiki JSON store. Defaults to data_dir/wiki.",
+    )
+    wiki_db: Path | None = Field(
+        default=None,
+        description="SQLite FTS index for the wiki. Defaults to wiki_dir/wiki.db.",
+    )
 
     # Server
     host: str = "127.0.0.1"
@@ -37,6 +45,10 @@ class Settings(BaseSettings):
         """Set derived defaults that depend on other fields."""
         if self.frames_dir is None:
             self.frames_dir = self.data_dir / "frames"
+        if self.wiki_dir is None:
+            self.wiki_dir = self.data_dir / "wiki"
+        if self.wiki_db is None:
+            self.wiki_db = self.wiki_dir / "wiki.db"
         return self
 
     @property

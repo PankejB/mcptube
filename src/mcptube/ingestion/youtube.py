@@ -3,6 +3,8 @@
 import json
 import logging
 import re
+import time
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import urlopen
 
@@ -15,6 +17,16 @@ logger = logging.getLogger(__name__)
 
 class ExtractionError(Exception):
     """Raised when video extraction fails."""
+
+
+class TranscriptThrottledError(ExtractionError):
+    """Raised when YouTube rate-limits a caption download (HTTP 429/503).
+
+    Distinct from a video that simply has no caption track: the transcript
+    exists but could not be fetched right now. Callers should retry rather
+    than persist an empty transcript, which would be indistinguishable from
+    "no captions available".
+    """
 
 
 class YouTubeExtractor:
@@ -32,6 +44,11 @@ class YouTubeExtractor:
     ]
 
     _LANG_PREFERENCE = ("en", "en-orig", "en-US", "en-GB")
+
+    # Backoff schedule (seconds) for rate-limited caption downloads.
+    # Deliberately short — a sustained block needs minutes-to-hours, which
+    # belongs to the caller, not to a blocking in-process sleep.
+    _RETRY_DELAYS = (2, 5, 15)
 
     def extract(self, url: str) -> Video:
         """Extract metadata and transcript from a YouTube video URL.
@@ -143,13 +160,43 @@ class YouTubeExtractor:
         return None
 
     def _download_json(self, url: str) -> dict | None:
-        """Download and parse JSON from a URL."""
-        try:
-            with urlopen(url, timeout=30) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except Exception as e:
-            logger.warning("Failed to download subtitle data: %s", e)
-            return None
+        """Download and parse JSON from a URL.
+
+        Retries with backoff on rate-limiting, then raises so the caller can
+        tell "throttled" apart from "no such captions". Other failures are
+        logged and reported as None (the caption track is unusable, but that
+        is not evidence of throttling).
+
+        Raises:
+            TranscriptThrottledError: If YouTube rate-limits the download
+                (HTTP 429/503) on every attempt.
+        """
+        last_code = None
+        for attempt, delay in enumerate(self._RETRY_DELAYS, start=1):
+            try:
+                with urlopen(url, timeout=30) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except HTTPError as e:
+                if e.code not in (429, 503):
+                    logger.warning("Failed to download subtitle data: %s", e)
+                    return None
+                last_code = e.code
+                if attempt < len(self._RETRY_DELAYS):
+                    logger.warning(
+                        "Subtitle download rate-limited (HTTP %s); retrying in %ss",
+                        e.code,
+                        delay,
+                    )
+                    time.sleep(delay)
+            except Exception as e:
+                logger.warning("Failed to download subtitle data: %s", e)
+                return None
+
+        raise TranscriptThrottledError(
+            f"YouTube rate-limited the caption download (HTTP {last_code}) — "
+            "the transcript exists but could not be fetched. Retry later; "
+            "do not treat this as 'no captions'."
+        )
 
     def _parse_json3(self, data: dict) -> list[TranscriptSegment]:
         """Parse YouTube json3 subtitle format into TranscriptSegment list.

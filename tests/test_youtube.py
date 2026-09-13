@@ -1,12 +1,18 @@
 # tests/test_youtube.py
 """Tests for YouTube video extraction."""
 
+import json
 from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError
 
 import pytest
 import yt_dlp
 
-from mcptube.ingestion.youtube import ExtractionError, YouTubeExtractor
+from mcptube.ingestion.youtube import (
+    ExtractionError,
+    TranscriptThrottledError,
+    YouTubeExtractor,
+)
 
 
 class TestParseVideoId:
@@ -174,3 +180,53 @@ class TestParseJson3:
         segments = extractor._parse_json3(data)
         assert len(segments) == 1
         assert segments[0].text == "Real text"
+
+
+class TestDownloadJsonThrottling:
+    """Caption downloads must distinguish rate-limiting from missing captions."""
+
+    @patch("mcptube.ingestion.youtube.time.sleep")
+    @patch("mcptube.ingestion.youtube.urlopen")
+    def test_raises_throttled_after_exhausting_retries(self, mock_urlopen, mock_sleep):
+        mock_urlopen.side_effect = HTTPError("url", 429, "Too Many Requests", {}, None)
+        extractor = YouTubeExtractor()
+
+        with pytest.raises(TranscriptThrottledError) as exc:
+            extractor._download_json("https://example.com/subs.json")
+
+        assert "429" in str(exc.value)
+        assert mock_urlopen.call_count == len(YouTubeExtractor._RETRY_DELAYS)
+        # Sleeps between attempts, but not after the final one.
+        assert mock_sleep.call_count == len(YouTubeExtractor._RETRY_DELAYS) - 1
+
+    @patch("mcptube.ingestion.youtube.time.sleep")
+    @patch("mcptube.ingestion.youtube.urlopen")
+    def test_retries_then_succeeds(self, mock_urlopen, mock_sleep):
+        payload = json.dumps({"events": []}).encode("utf-8")
+        ok = MagicMock()
+        ok.read.return_value = payload
+        ok.__enter__ = lambda s: s
+        ok.__exit__ = lambda *a: None
+        mock_urlopen.side_effect = [
+            HTTPError("url", 503, "Service Unavailable", {}, None),
+            ok,
+        ]
+        extractor = YouTubeExtractor()
+
+        assert extractor._download_json("https://example.com/subs.json") == {"events": []}
+        assert mock_urlopen.call_count == 2
+
+    @patch("mcptube.ingestion.youtube.urlopen")
+    def test_non_throttle_http_error_returns_none(self, mock_urlopen):
+        """A 404 means the track is unusable — not evidence of throttling."""
+        mock_urlopen.side_effect = HTTPError("url", 404, "Not Found", {}, None)
+        extractor = YouTubeExtractor()
+
+        assert extractor._download_json("https://example.com/subs.json") is None
+
+    @patch("mcptube.ingestion.youtube.urlopen")
+    def test_generic_error_returns_none(self, mock_urlopen):
+        mock_urlopen.side_effect = ValueError("boom")
+        extractor = YouTubeExtractor()
+
+        assert extractor._download_json("https://example.com/subs.json") is None
