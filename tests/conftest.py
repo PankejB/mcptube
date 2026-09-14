@@ -1,5 +1,7 @@
 """Shared fixtures for mcptube tests."""
 
+import os
+
 import pytest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,6 +10,37 @@ from unittest.mock import MagicMock, patch
 from mcptube.models import Chapter, TranscriptSegment, Video
 from mcptube.storage.sqlite import SQLiteVideoRepository
 from mcptube.storage.vectorstore import ChromaVectorStore
+
+
+@pytest.fixture(autouse=True)
+def isolate_settings(tmp_path, monkeypatch):
+    """Isolate every test from the developer's real mcptube configuration.
+
+    Two problems this solves:
+
+    1. `Settings` reads any MCPTUBE_* environment variable, so tests asserting
+       on default values failed for anyone who actually uses mcptube — the
+       suite only passed on a machine with a clean environment.
+
+    2. `FrameExtractor._cache_path` writes through the module-level `settings`
+       singleton. With MCPTUBE_DATA_DIR pointing at a real library, running
+       the suite deposited fixture files (an 11-byte "abc123_10.00.jpg") into
+       it. Tests must never write outside tmp_path.
+
+    Clearing the variables fixes (1); repointing the already-constructed
+    singleton at tmp_path fixes (2), since it was built at import time and
+    cannot be influenced by the environment any more.
+    """
+    for key in [k for k in os.environ if k.startswith("MCPTUBE_")]:
+        monkeypatch.delenv(key, raising=False)
+
+    from mcptube import config
+
+    data_dir = tmp_path / "mcptube_home"
+    monkeypatch.setattr(config.settings, "data_dir", data_dir)
+    monkeypatch.setattr(config.settings, "frames_dir", data_dir / "frames")
+    monkeypatch.setattr(config.settings, "wiki_dir", data_dir / "wiki")
+    monkeypatch.setattr(config.settings, "wiki_db", data_dir / "wiki" / "wiki.db")
 
 
 SAMPLE_WIKI_EXTRACTION = """{
